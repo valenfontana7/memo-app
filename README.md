@@ -574,10 +574,47 @@ RSpec.describe "Tasks with authentication", type: :request do
   let!(:user) { create(:user) }  
   let!(:other_user) { create(:user) }  
   let!(:user_post) { create(:post, user_id: user.id) }  
-  let!(:other_user_post) { create(:post, user_id: other_user.id) }  
+  let!(:other_user_post_public) { create(:post, user_id: other_user.id, visibility: "public") }  
+  let!(:other_user_post_private) { create(:post, user_id: other_user.id, visibility: "private") }  
+  let!(:other_user_post_draft) { create(:post, user_id: other_user.id, visibility: "public", status: "pending") }  
+  let!(:auth_headers) { { 'Authorization' => "Bearer #{user.auth_token}"}}  
+  let!(:other_auth_headers) { { 'Authorization' => "Bearer #{other_user.auth_token}"}}  
   describe "GET /tasks/{id}" do  
     context "with valid auth" do  
-      context "when requesting other's author post" do  
+      context "when requesting other's author task" do  
+        describe "when task is public" do  
+            before { get "/tasks/#{other_user_post_public.id}", headers: auth_headers }   
+          context "payload" do  
+            subject { JSON.parse(response.body) }  
+            it { is_expected.to include(:id) }  
+          end  
+          context "response" do  
+            subject { response }  
+            it { is_expected.to have_http_status(:ok) }  
+          end  
+        end  
+        describe "when post is draft" do  
+          before { get "/tasks/#{other_user_post_draft.id}", headers: auth_headers }   
+          context "payload" do  
+            subject { JSON.parse(response.body) }  
+            it { is_expected.to include(:error) }  
+          end  
+          context "response" do  
+            subject { response }  
+            it { is_expected.to have_http_status(:not_found) }  
+          end  
+        end  
+        describe "when post is private" do  
+          before { get "/tasks/#{other_user_post_private.id}", headers: auth_headers }   
+          context "payload" do  
+            subject { JSON.parse(response.body) }  
+            it { is_expected.to include(:error) }  
+          end  
+          context "response" do  
+            subject { response }  
+            it { is_expected.to have_http_status(:not_found) }  
+          end  
+        end  
       end  
       context "when requesting user's post" do  
       end  
@@ -588,8 +625,121 @@ RSpec.describe "Tasks with authentication", type: :request do
   describe "PUT /posts/{id}" do  
   end  
 end  
+# Autenticación con Tokens
 
+# 37) Modificar el modelo de usuario en models/user.rb
+class User < ApplicationRecord  
+  has_many :posts  
+  validates :first_name, presence: true  
+  validates :last_name, presence: true  
+  validates :role, presence: true  
+  validates :status, presence: true  
+  validates :email, presence: true  
+  validates :auth_token, presence: true  
+  after_initialize :generate_auth_token  
+  def generate_auth_token  
+    unless auth_token.present?  
+      self.auth_token = TokenGenerationService.generate  
+    end  
+  end  
+end  
+# 38) Crear el servicio TokenGeneration en services/token_generation_service
+class TokenGenerationService  
+  def self.generate  
+    SecureRandom.hex  
+  end  
+end  
+# 39) Eliminar el auth_token del factory_bot de users en test/factories/users.rb ya que se hará automáticamente por el servicio.
+# 40) Cambiar la lógica de auth en controllers/posts_controller.rb
+class PostsController < ApplicationController  
+  before_action :authenticate_user!, only: [:update, :create]  
+  ...  
+  ...  
+  ...  
+  ...  
+  private  
+  def create_params  
+    params.require(:post).permit(:title, :content, :link, :status, :core, :visibility, :user_id)  
+  end  
+  def update_params  
+    params.require(:post).permit(:title, :content, :link, :status, :core, :visibility)  
+  end  
+  def authenticate_user!  
+    token_regex = /Bearer (\w+)/  
+    headers = request.headers  
+    if headers['Authorization'].present? && headers['Authorization'].match(token_regex)  
+      token = headers['Authorization'].match(token_regex)[1]  
+      if(Current.user = User.find_by_auth_token(token))  
+        return  
+      end  
+    end  
+    render json: {error: "Unauthorized"}, status: :unauthorized  
+  end  
+end  
+# 41) Implementar clase current en models/current.rb para que la sesión persista
+class Current < ActiveSupport::CurrentAttributes  
+  attribute :user  
+end  
+# 42) Modificar el metodo create_params en controllers/posts_controller.rb, para que ya no permitamos cambiar el user id
+# ANTES
+def create_params
+  params.require(:post).permit(:title, :content, :link, :status, :core, :visibility, :user_id)
+end
+# DESPUES
+def create_params
+  params.require(:post).permit(:title, :content, :link, :status, :core, :visibility)
+end
+# 43) Cambiar los métodos create y update para solo permitir cambiar o crear un post propio
+  # POST /posts  
+  def create  
+    if create_params["visibility"] == "public" || create_params["visibility"] == "private" && create_params["status"] == "pending" || create_params["status"] == "published" && create_params["core"] == "link" || create_params["core"] == "note" || create_params["core"] == "task" || create_params["core"] == "article"  
+      @post = Current.user.posts.create!(create_params)  
+      render json: @post, status: :created  
+    else  
+      raise ActiveRecord::RecordInvalid  
+    end  
+  end  
+  # PUT /posts/{id}  
+  def update  
+    @post = Current.user.posts.find(params[:id])  
+    if update_params["visibility"] == "public" || update_params["visibility"] == "private" && update_params["status"] == "pending" || update_params["status"] == "published" && update_params["core"] == "link" || update_params["core"] == "note" || update_params["core"] == "task" || update_params["core"] == "article"  
+      @post.update!(update_params)  
+      render json: @post, status: :ok  
+    else  
+      raise ActiveRecord::RecordInvalid  
+    end  
+  end  
 
+# 44) En el mismo archivo controlador, gestionar las peticiones GET para limitar las posibilidades y cumplir con los tests
+  "#" GET /tasks  
+  def published_tasks  
+    @posts = Post.where(status: "published", user_id: Current.user.id)  
+    if !params[:search].nil? && params[:search].present?  
+      @posts = PostsSearchService.search(@posts, params[:search])  
+    end  
+    render json: @posts, status: :ok  
+  end  
+  "#" GET /public/tasks  
+  def published_public_tasks  
+    @posts = Post.where(status: "published", visibility: "public").includes(:user)    
+    if !params[:search].nil? && params[:search].present?  
+      @posts = PostsSearchService.search(@posts, params[:search])  
+    end  
+    render json: @posts, status: :ok  
+  end  
+  "#" GET /tasks/{id}  
+  def task  
+    @post = Post.find(params[:id])  
+    if(@post.user_id == Current.user && Current.user.id || @post.visibility == "public")  
+      if(@post.user_id != Current.user && @post.status == "pending")  
+        render json: { error: "404 Not Found"}, status: :not_found  
+      else  
+        render json: @post, status: :ok  
+      end  
+    else  
+      render json: { error: "404 Not Found"}, status: :not_found  
+    end  
+  end  
 
 
 

@@ -4,7 +4,8 @@ class PostSerializer < ActiveModel::Serializer
   def author
     user = self.object.user
     {
-      name: user["name"],
+      first_name: user.first_name,
+      last_name: user.last_name,
       email: user["email"],
       id: user["id"]
     }

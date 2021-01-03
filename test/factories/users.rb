@@ -5,6 +5,5 @@ FactoryBot.define do
     role { "user" }
     status { "active" }
     email { Faker::Internet.email }
-    auth_token { "xxxxx" }
   end
 end
