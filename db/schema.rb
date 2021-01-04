@@ -10,7 +10,13 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema.define(version: 2020_12_31_015805) do
+ActiveRecord::Schema.define(version: 2021_01_04_035357) do
+
+  create_table "post_users", force: :cascade do |t|
+    t.integer "post_id"
+    t.integer "user_id"
+    t.string "permission"
+  end
 
   create_table "posts", force: :cascade do |t|
     t.string "status"
@@ -34,6 +40,7 @@ ActiveRecord::Schema.define(version: 2020_12_31_015805) do
     t.string "auth_token"
     t.datetime "created_at", precision: 6, null: false
     t.datetime "updated_at", precision: 6, null: false
+    t.string "password_digest"
   end
 
   add_foreign_key "posts", "users"
